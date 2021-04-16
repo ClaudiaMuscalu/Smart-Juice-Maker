@@ -1,8 +1,5 @@
 /*
-  using Mathieu Stefani's example, 07 février 2016
-  Rares Cristea, 12.03.2021
-  Smart Juice Maker Project
-   
+  Smart Juice Maker Project 
 */
 
 #include <algorithm>
@@ -23,29 +20,28 @@
 #include <string>
 #include <algorithm>
 #include <boost/algorithm/string.hpp>
-#include <nlohmann/json.hpp>
 #include <chrono>
 #include <ctime>
-
+#include <string>
 #include <signal.h>
 
+#include "models.cpp"
+#include "repository.cpp"
+
+// General advice: pay atetntion to the namespaces that you use in various contexts. Could prevent headaches.
 using namespace std;
 using namespace Pistache;
-using json = nlohmann::json;
-
-// Declare all helper files
-const std::string caloriesFile = "fruits_calories.txt";
-const std::string vitaminsFile = "fruits_vitamins.txt";
-const std::string juiceHistoryDB = "juices.txt";
 
 // Helper class
 class Helpers
 {
 public:
-    const static std::string currentDateTime();
+    const static string currentDateTime();
+    const static time_t getTimestampFromString(const string &dateTimeString);
+    static void removeStringDuplicates(vector<string> &v);
 };
 
-const std::string Helpers::currentDateTime()
+const string Helpers::currentDateTime()
 {
     time_t now = time(0);
     struct tm tstruct;
@@ -55,111 +51,233 @@ const std::string Helpers::currentDateTime()
 
     return buf;
 }
-// General advice: pay atetntion to the namespaces that you use in various contexts. Could prevent headaches.
-// This is just a helper function to preety-print the Cookies that one of the enpoints shall receive.
-void printCookies(const Http::Request &req)
+
+const time_t Helpers::getTimestampFromString(const string &dateTimeString) {
+    const char *dateTime = dateTimeString.data();
+    struct tm tm;
+    strptime(dateTime, "%Y-%m-%d.%X", &tm);
+    return mktime(&tm);
+}
+
+ void Helpers::removeStringDuplicates(vector<string> &v)
 {
-    auto cookies = req.cookies();
-    std::cout << "Cookies: [" << std::endl;
-    const std::string indent(4, ' ');
-    for (const auto &c : cookies)
+    vector<string>::iterator itr = v.begin();
+    unordered_set<string> s;
+ 
+    for (auto curr = v.begin(); curr != v.end(); ++curr)
     {
-        std::cout << indent << c.name << " = " << c.value << std::endl;
+        if (s.insert(*curr).second) {
+            *itr++ = *curr;
+        }
     }
-    std::cout << "]" << std::endl;
+ 
+    v.erase(itr, v.end());
 }
 
-class FruitCalories
-{
-public:
-    std::string name;
-    double calories;
-};
-
-class Fruit
-{
-public:
-    std::string name;
-    double quantity;
-    std::vector<string> vitamins;
-};
-
-class Juice
-{
-public:
-    static int id;
-    double calories;
-    double quantity;
-    const string preparationDate = Helpers::currentDateTime();
-    std::vector<string> vitamins;
-    std::vector<string> fruits;
-};
-
-// TODO: get the number of juice form juices.txt
-int Juice::id = 0;
-
-// from_json overloading
-void from_json(const json &json, Fruit &fruit)
-{
-    json.at("fruit").get_to(fruit.name);
-    json.at("quantity").get_to(fruit.quantity);
-}
-
-void from_json(const json &json, FruitCalories &fruitCalories)
-{
-    json.at("fruit").get_to(fruitCalories.name);
-    json.at("calories").get_to(fruitCalories.calories);
-}
-
-// to_json overloading
-void to_json(json &j, const Juice &juice)
-{
-    j = json{
-        {"id", juice.id},
-        {"calories", juice.calories},
-        {"quantity", juice.quantity},
-        {"preparationDate", juice.preparationDate},
-        {"fruits", juice.fruits}};
-}
-
-// Some generic namespace, with a simple function we could use to test the creation of the endpoints.
+// Some generic namespace, with a simple function we could use to test the creation of the endpoints. blablabla
 namespace Generic
 {
     void handleReady(const Rest::Request &, Http::ResponseWriter response)
     {
-        response.send(Http::Code::Ok, "1");
+        response.send(Http::Code::Ok, "UP\n");
+    }
+
+    vector<string> GetFruitNames(vector<Fruit> fruits)
+    {
+        vector<string> fruitNames;
+        
+        for(auto fruit : fruits)
+            fruitNames.push_back(fruit.getName());
+
+        return fruitNames;
+    }
+
+    vector<string> GetVitaminsByFruits(vector<string> clientFruits)
+    {
+        auto vitaminFruits = GetVitaminFruits();
+        vector<string> vitamins;
+
+        for(auto vitamin : vitaminFruits)
+        {
+            for(auto fruit : vitamin.getFruits())
+            {
+                for(auto clientFruit : clientFruits)
+                {
+                    if(boost::iequals(clientFruit, fruit))
+                    {
+                        vitamins.push_back(vitamin.getVitaminName());
+                        break;
+                    }
+                }
+            }
+        }
+
+        return vitamins;
     }
 
     void makeJuice(const Rest::Request &request, Http::ResponseWriter response)
     {
         // from client
         auto clientJson = nlohmann::json::parse(request.body());
-        auto clientFruits = clientJson.get<std::vector<Fruit>>();
-
-        std::ifstream read(caloriesFile);
-        json in = json::parse(read);
-        auto fruitCalories = in.get<std::vector<FruitCalories>>();
+        auto clientFruits = clientJson.get<vector<Fruit>>();
+        auto fruitCalories = GetFruitCalories();
+        auto juices = GetJuiceHistory();
 
         Juice newJuice;
-        Juice::id++;
-        newJuice.quantity = 0;
-        newJuice.calories = 0;
-        for (auto fruitClient : clientFruits)
+
+        newJuice.setIdentifier(juices.size() + 1);
+        newJuice.setQuantity(0);
+        newJuice.setCalories(0);
+        newJuice.setPreparationDate(Helpers::currentDateTime());
+
+        for (auto clientFruit : clientFruits)
         {
             for (auto fruitCal : fruitCalories)
             {
-                if (fruitClient.name == fruitCal.name)
-                {
-                    newJuice.fruits.push_back(fruitClient.name);
-                    newJuice.quantity += fruitClient.quantity;
-                    newJuice.calories += (fruitCal.calories * fruitClient.quantity) / 100;
+                if (boost::iequals(clientFruit.getName(), fruitCal.getName()))
+                {   
+                    auto fruits = newJuice.getFruits();
+                    fruits.push_back(clientFruit.getName());
+                    newJuice.setFruits(fruits);
+                    newJuice.setQuantity(newJuice.getQuantity() + clientFruit.getQuantity());
+                    newJuice.setCalories(newJuice.getCalories() + (fruitCal.getCalories() * clientFruit.getQuantity()) / 100);
                 }
             }
         }
 
-        json juice(newJuice);
+        vector<string> vitamins = GetVitaminsByFruits(GetFruitNames(clientFruits));
+        Helpers::removeStringDuplicates(vitamins);
+        newJuice.setVitamins(vitamins);
 
+        json juice(newJuice);
+        AddJuiceInHistory(juices, newJuice);
+       
         response.send(Http::Code::Ok, juice.dump());
+    }
+
+    // second functionality, get a list of fruits based on a list of vitamins from client
+    void getFruitsByVitamins(const Rest::Request &request, Http::ResponseWriter response)
+    {
+        auto clientJson = nlohmann::json::parse(request.body());
+        auto clientVitamins = clientJson.get<vector<string>>();
+
+        auto vitaminFruits = GetVitaminFruits();
+
+        vector<string> fruits;
+
+        for(auto clientVitamin : clientVitamins)
+        {
+            for(auto vitamin : vitaminFruits)
+            {
+                if(boost::iequals(clientVitamin, vitamin.getVitaminName()))
+                {
+                    auto fruitsCopy = vitamin.getFruits();
+                    fruits.insert(fruits.end(), fruitsCopy.begin(), fruitsCopy.end());
+                }
+            }
+        }
+
+        Helpers::removeStringDuplicates(fruits);
+
+        response.send(Http::Code::Ok, json(fruits).dump());
+    }
+
+    // the third functionality: get all juices between two given dates
+    // if one of the dates is missing, it will be ignored
+    void getJuicesBetweenDates(const Rest::Request &request, Http::ResponseWriter response) 
+    {
+        const auto clientJson = nlohmann::json::parse(request.body());
+        time_t dateFrom = 0, dateTo = numeric_limits<time_t>::max();
+
+        if (clientJson.contains("dateFrom")) {
+            dateFrom = Helpers::getTimestampFromString(clientJson["dateFrom"].get<string>());
+        }
+        if (clientJson.contains("dateTo")) {
+            dateTo = Helpers::getTimestampFromString(clientJson["dateTo"].get<string>());
+        }
+        
+        const auto juices = GetJuiceHistory();
+        vector<Juice> filteredJuices;
+        
+        for (auto juice : juices) 
+        {
+            auto preparationDate = Helpers::getTimestampFromString(juice.getPreparationDate());
+
+            if (difftime(preparationDate, dateFrom) > 0 && difftime(preparationDate, dateTo) < 0)
+            {
+                filteredJuices.push_back(juice);
+            }
+        }  
+
+        response.send(Http::Code::Ok, json(filteredJuices).dump());
+    }
+
+    // the fourth functionality: get a juice by identifier
+    void getJuiceByIdentifier(const Rest::Request &request, Http::ResponseWriter response) 
+    {
+        const auto clientJson = nlohmann::json::parse(request.body());
+        int identifier = clientJson["identifier"].get<int>();
+
+        const auto juices = GetJuiceHistory();
+        Juice *desiredJuice = NULL; 
+
+        for (auto juice : juices) 
+        {
+            if (identifier == juice.getIdentifier())
+            {
+                desiredJuice = new Juice(juice);
+                break;
+            }
+        }
+        
+        if (desiredJuice != NULL) 
+        {
+            response.send(Http::Code::Ok, json(*(desiredJuice)).dump());  
+            return;
+        } 
+        response.send(Http::Code::Not_Found, "Juice not found!"); 
+    }
+
+    // get a list of fruits based on the amount of calories the juice will contain
+    void getQuantitiesByCaloriesAndFruits(const Rest::Request &request, Http::ResponseWriter response)
+    {
+        const auto clientJson = nlohmann::json::parse(request.body());
+        double calories = clientJson["calories"].get<int>();
+        auto clientFruits = clientJson["fruits"].get<vector<Fruit>>();
+        auto calSum = 0;
+        
+        auto fruitCalories = GetFruitCalories();
+        
+        for (auto clientFruit : clientFruits) 
+        {
+            for (auto fruitCal : fruitCalories) 
+            {
+                if (boost::iequals(clientFruit.getName(), fruitCal.getName()))
+                {
+                    auto newCal = (clientFruit.getQuantity() * fruitCal.getCalories()) / 100;
+                    calSum += newCal;
+                }
+            }
+        }
+
+        if (calSum < calories) 
+        {
+            response.send(Http::Code::Not_Found, "Insufficient num of calories!"); 
+        } else 
+        {
+            vector<Fruit> newFruits;
+            for (auto clientFruit : clientFruits) 
+            {
+                auto newQuantity = (clientFruit.getQuantity() * calories) / calSum;
+                Fruit newFruit;
+                newFruit.setName(clientFruit.getName());
+                // Round the results to 2 points decimal
+                newFruit.setQuantity(round( newQuantity * 100.0 ) / 100.0);
+                newFruits.push_back(newFruit);
+            }
+            
+            response.send(Http::Code::Ok, json(newFruits).dump());
+        }
     }
 }
 
@@ -168,7 +286,7 @@ class SmartJuiceMakerEndpoint
 {
 public:
     explicit SmartJuiceMakerEndpoint(Address addr)
-        : httpEndpoint(std::make_shared<Http::Endpoint>(addr))
+        : httpEndpoint(make_shared<Http::Endpoint>(addr))
     {
     }
 
@@ -203,77 +321,10 @@ private:
         // Generally say that when http://localhost:9080/ready is called, the handleReady function should be called.
         Routes::Get(router, "/ready", Routes::bind(&Generic::handleReady));
         Routes::Post(router, "/makeJuice", Routes::bind(&Generic::makeJuice));
-        Routes::Get(router, "/auth", Routes::bind(&SmartJuiceMakerEndpoint::doAuth, this));
-        Routes::Post(router, "/settings/:settingName/:value", Routes::bind(&SmartJuiceMakerEndpoint::setSetting, this));
-        Routes::Get(router, "/settings/:settingName/", Routes::bind(&SmartJuiceMakerEndpoint::getSetting, this));
-    }
-
-    void doAuth(const Rest::Request &request, Http::ResponseWriter response)
-    {
-        // Function that prints cookies
-        printCookies(request);
-        // In the response object, it adds a cookie regarding the communications language.
-        response.cookies()
-            .add(Http::Cookie("lang", "en-US"));
-        // Send the response
-        response.send(Http::Code::Ok);
-    }
-
-    // Endpoint to configure one of the SmartJuiceMaker's settings.
-    void setSetting(const Rest::Request &request, Http::ResponseWriter response)
-    {
-        // You don't know what the parameter content that you receive is, but you should
-        // try to cast it to some data structure. Here, I cast the settingName to string.
-        auto settingName = request.param(":settingName").as<std::string>();
-
-        // This is a guard that prevents editing the same value by two concurent threads.
-        Guard guard(smartJuiceMakerLock);
-
-        string val = "";
-        if (request.hasParam(":value"))
-        {
-            auto value = request.param(":value");
-            val = value.as<string>();
-        }
-
-        // Setting the smart juice maker's setting to value
-        int setResponse = sjm.set(settingName, val);
-
-        // Sending some confirmation or error response.
-        if (setResponse == 1)
-        {
-            response.send(Http::Code::Ok, settingName + " was set to " + val);
-        }
-        else
-        {
-            response.send(Http::Code::Not_Found, settingName + " was not found and or '" + val + "' was not a valid value ");
-        }
-    }
-
-    // Setting to get the settings value of one of the configurations of the SmartJuiceMaker
-    void getSetting(const Rest::Request &request, Http::ResponseWriter response)
-    {
-        auto settingName = request.param(":settingName").as<std::string>();
-
-        Guard guard(smartJuiceMakerLock);
-
-        string valueSetting = sjm.get(settingName);
-
-        if (valueSetting != "")
-        {
-
-            // In this response I also add a couple of headers, describing the server that sent this response, and the way the content is formatted.
-            using namespace Http;
-            response.headers()
-                .add<Header::Server>("pistache/0.1")
-                .add<Header::ContentType>(MIME(Text, Plain));
-
-            response.send(Http::Code::Ok, settingName + " is " + valueSetting);
-        }
-        else
-        {
-            response.send(Http::Code::Not_Found, settingName + " was not found");
-        }
+        Routes::Post(router, "/getFruitsByVitamins", Routes::bind(&Generic::getFruitsByVitamins));
+        Routes::Get(router, "/getJuicesBetweenDates", Routes::bind(&Generic::getJuicesBetweenDates));
+        Routes::Get(router, "/getJuiceByIdentifier", Routes::bind(&Generic::getJuiceByIdentifier));
+        Routes::Post(router, "/getQuantitiesByCaloriesAndFruits", Routes::bind(&Generic::getQuantitiesByCaloriesAndFruits));
     }
 
     // Defining the class of the SmartJuiceMaker. It should model the entire configuration of the SmartJuiceMaker
@@ -281,59 +332,18 @@ private:
     {
     public:
         explicit SmartJuiceMaker() {}
-
-        // Setting the value for one of the settings. Hardcoded for the defrosting option
-        int set(std::string name, std::string value)
-        {
-            if (name == "defrost")
-            {
-                defrost.name = name;
-                if (value == "true")
-                {
-                    defrost.value = true;
-                    return 1;
-                }
-                if (value == "false")
-                {
-                    defrost.value = false;
-                    return 1;
-                }
-            }
-            return 0;
-        }
-
-        // Getter
-        string get(std::string name)
-        {
-            if (name == "defrost")
-            {
-                return std::to_string(defrost.value);
-            }
-            else
-            {
-                return "";
-            }
-        }
-
-    private:
-        // Defining and instantiating settings.
-        struct boolSetting
-        {
-            std::string name;
-            bool value;
-        } defrost;
     };
 
     // Create the lock which prevents concurrent editing of the same variable
-    using Lock = std::mutex;
-    using Guard = std::lock_guard<Lock>;
+    using Lock = mutex;
+    using Guard = lock_guard<Lock>;
     Lock smartJuiceMakerLock;
 
     // Instance of the smart juice maker model
     SmartJuiceMaker sjm;
 
     // Defining the httpEndpoint and a router.
-    std::shared_ptr<Http::Endpoint> httpEndpoint;
+    shared_ptr<Http::Endpoint> httpEndpoint;
     Rest::Router router;
 };
 
@@ -356,10 +366,10 @@ int main(int argc, char *argv[])
 
     if (argc >= 2)
     {
-        port = static_cast<uint16_t>(std::stol(argv[1]));
+        port = static_cast<uint16_t>(stol(argv[1]));
 
         if (argc == 3)
-            thr = std::stoi(argv[2]);
+            thr = stoi(argv[2]);
     }
 
     Address addr(Ipv4::any(), port);
@@ -379,11 +389,11 @@ int main(int argc, char *argv[])
     int status = sigwait(&signals, &signal);
     if (status == 0)
     {
-        std::cout << "received signal " << signal << std::endl;
+        cout << "received signal " << signal << endl;
     }
     else
     {
-        std::cerr << "sigwait returns " << status << std::endl;
+        cerr << "sigwait returns " << status << endl;
     }
 
     stats.stop();
